@@ -348,6 +348,7 @@ class SqParquetDB(SqDB):
                 self.logger.info(
                     f'No input records to coalesce for {entry}')
                 continue
+            end = None
             try:
                 if not os.path.isdir(table_outfolder):
                     os.makedirs(table_outfolder)
@@ -372,8 +373,10 @@ class SqParquetDB(SqDB):
                                              state.wrrec_count,
                                              int(datetime.now(tz=timezone.utc)
                                                  .timestamp() * 1000)))
-            except Exception as e:  # pylint: disable=broad-except
-
+            except Exception as e:
+                self.logger.exception(f'Unable to coalesce table {entry}')
+                if end is None:
+                    end = time()
                 stats.append(SqCoalesceStats(entry, period, int(end-start),
                                              0, 0,
                                              int(datetime.now(tz=timezone.utc)
