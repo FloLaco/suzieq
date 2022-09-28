@@ -31,6 +31,7 @@ IOS_SLEEP_BET_CMDS = 5          # in seconds
 IOS_TIME_AFTER_DISCOVERY = 60   # time to wait after ios(xe,xr) auto-discovery
 IOS_CONN_INITIAL_BACKOFF = 1
 IOS_CONN_INITIAL_BACKOFF_SLOW = 30
+IOS_CONNECTION_ATTEMPTS = 4
 
 TNode = TypeVar('TNode', bound='Node')
 
@@ -1432,8 +1433,9 @@ class IosXRNode(Node):
         if use_lock:
             await self.ssh_ready.acquire()
 
+        attempts = 0
         while not self._conn:
-
+            prev_auth_retry = self._retry
             await super()._init_ssh(init_dev_data=False, use_lock=False)
 
             if self.is_connected:
@@ -1441,8 +1443,10 @@ class IosXRNode(Node):
                     f'Connection succeeded via SSH for {self.hostname}')
                 break
 
-            if not self._retry:
-                break
+            # As we want to do all the maximum authentication attempts,
+            # reduce attempts only if the reason is not an authentication error
+            if prev_auth_retry == self._retry:
+                attempts += 1
 
             await asyncio.sleep(backoff_period)
             backoff_period *= 2
@@ -1541,7 +1545,9 @@ class IosXENode(Node):
         if use_lock:
             await self.ssh_ready.acquire()
 
+        attempts = 0
         while not self.is_connected:
+            prev_auth_retry = self._retry
             # Don't release rel lock here
             await super()._init_ssh(init_dev_data=False, use_lock=False)
 
@@ -1550,7 +1556,12 @@ class IosXENode(Node):
                     f'Connection succeeded via SSH for {self.hostname}')
                 break
 
-            if not self._retry:
+            # As we want to do all the maximum authentication attempts,
+            # reduce attempts only if the reason is not an authentication error
+            if prev_auth_retry == self._retry:
+                attempts += 1
+
+            if not self._retry or attempts >= IOS_CONNECTION_ATTEMPTS:
                 break
 
             await asyncio.sleep(backoff_period)
