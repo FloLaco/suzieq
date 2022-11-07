@@ -16,6 +16,12 @@ from suzieq.shared.utils import build_query_str
 class InterfacesObj(SqPandasEngine):
     '''Backend class to handle manipulating interfaces table with pandas'''
 
+    def __init__(self, baseobj):
+        super().__init__(baseobj)
+        self._assert_result_cols = ['namespace', 'hostname', 'ifname', 'state',
+                                    'peerHostname', 'peerIfname', 'result',
+                                    'assertReason', 'timestamp']
+
     @staticmethod
     def table_name():
         '''Table name'''
@@ -267,18 +273,21 @@ class InterfacesObj(SqPandasEngine):
         columns = ["namespace", "hostname", "ifname", "state", "mtu",
                    "timestamp"]
 
-        matchval = kwargs.pop('matchval', [])
+        value = kwargs.pop('value', [])
         result = kwargs.pop('result', '')
 
-        matchval = [int(x) for x in matchval]
+        value = [int(x) for x in value]
 
         result_df = self.get(columns=columns, **kwargs) \
                         .query('ifname != "lo"')
 
+        if result_df.empty:
+            return result_df
+
         if not result_df.empty:
             result_df['result'] = result_df.apply(
-                lambda x, matchval: 'pass' if x['mtu'] in matchval else 'fail',
-                axis=1, args=(matchval,))
+                lambda x, value: 'pass' if x['mtu'] in value else 'fail',
+                axis=1, args=(value,))
 
         if result == "fail":
             result_df = result_df.query('result == "fail"')
@@ -382,10 +391,10 @@ class InterfacesObj(SqPandasEngine):
 
         if lldp_df.empty:
             if result != 'pass':
-                if_df['assertReason'] = 'No LLDP peering info'
-                if_df['result'] = 'fail'
+                lldp_df['assertReason'] = 'No LLDP peering info'
+                lldp_df['result'] = 'fail'
 
-            return if_df
+            return lldp_df
 
         # Now create a single DF where you get the MTU for the lldp
         # combo of (namespace, hostname, ifname) and the MTU for
@@ -440,10 +449,10 @@ class InterfacesObj(SqPandasEngine):
 
         if combined_df.empty:
             if result != 'pass':
-                if_df['assertReason'] = 'No LLDP peering info'
-                if_df['result'] = 'fail'
+                combined_df['assertReason'] = 'No LLDP peering info'
+                combined_df['result'] = 'fail'
 
-            return if_df
+            return combined_df
 
         combined_df = combined_df.fillna(
             {'mtuPeer': 0, 'speedPeer': 0, 'typePeer': '',
@@ -555,9 +564,7 @@ class InterfacesObj(SqPandasEngine):
             lambda x: x if len(x) else '-'
         )
 
-        return combined_df[['namespace', 'hostname', 'ifname', 'state',
-                            'peerHostname', 'peerIfname', 'result',
-                            'assertReason', 'timestamp']]
+        return combined_df[self._assert_result_cols]
 
     def _drop_junos_pifnames(self, if_df: pd.DataFrame) -> pd.DataFrame:
         """This function drops parent interfaces of Junos subinterfaces ending
@@ -630,10 +637,10 @@ class InterfacesObj(SqPandasEngine):
         namespace = kwargs.get('namespace', [])
         hostname = kwargs.get('hostname', [])
 
-        conf_df = self._get_table_sqobj('devconfig') \
+        conf_df = self._get_table_sqobj('devconfig', start_time='') \
             .get(namespace=namespace, hostname=hostname)
 
-        devdf = self._get_table_sqobj('device') \
+        devdf = self._get_table_sqobj('device', start_time='') \
             .get(namespace=namespace, hostname=hostname,
                  columns=['namespace', 'hostname', 'os'],
                  ignore_neverpoll=True)
@@ -645,6 +652,8 @@ class InterfacesObj(SqPandasEngine):
         for row in conf_df.itertuples():
             # Check what type of device this is
             # TBD: SONIC support
+            conf = None
+            nos = None
             if not devdf.empty:
                 nos = devdf[(devdf.namespace == row.namespace) &
                             (devdf.hostname == row.hostname)]['os'].tolist()
@@ -669,18 +678,19 @@ class InterfacesObj(SqPandasEngine):
             except Exception:  # pylint: disable=broad-except
                 continue
 
-            pm_dict = get_access_port_interfaces(conf, nos)
-            pm_list.extend([{'namespace': row.namespace,
-                             'hostname': row.hostname,
-                             'ifname': k,
-                             'portmode': 'access',
-                             'vlan': v} for k, v in pm_dict.items()])
-            pm_dict = get_trunk_port_interfaces(conf, nos)
-            pm_list.extend([{'namespace': row.namespace,
-                             'hostname': row.hostname,
-                             'ifname': k,
-                             'portmode': 'trunk',
-                             'vlan': v} for k, v in pm_dict.items()])
+            if conf and nos:
+                pm_dict = get_access_port_interfaces(conf, nos)
+                pm_list.extend([{'namespace': row.namespace,
+                                 'hostname': row.hostname,
+                                 'ifname': k,
+                                 'portmode': 'access',
+                                 'vlan': v} for k, v in pm_dict.items()])
+                pm_dict = get_trunk_port_interfaces(conf, nos)
+                pm_list.extend([{'namespace': row.namespace,
+                                 'hostname': row.hostname,
+                                 'ifname': k,
+                                 'portmode': 'trunk',
+                                 'vlan': v} for k, v in pm_dict.items()])
 
         pm_df = pd.DataFrame(pm_list)
 
@@ -727,7 +737,7 @@ class InterfacesObj(SqPandasEngine):
         if df.empty:
             return df
 
-        vlan_df = self._get_table_sqobj('vlan') \
+        vlan_df = self._get_table_sqobj('vlan', start_time='') \
                       .get(namespace=kwargs.get('namespace', []))
 
         if vlan_df.empty:
