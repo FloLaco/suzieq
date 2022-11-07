@@ -588,6 +588,8 @@ class Node:
             asyncssh.SSHClientConnectionOptions: [description]
         """
         options = asyncssh.SSHClientConnectionOptions(
+            host=self.address,
+            port=self.port,
             connect_timeout=self.connect_timeout,
             username=self.username,
             agent_identities=self.pvtkey if self.pvtkey else None,
